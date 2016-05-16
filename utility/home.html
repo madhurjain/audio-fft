@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="">
+    <meta name="author" content="">
+    <!-- <link rel="icon" href="assets/favicon.ico"> -->
+
+    <title>Audio FFT</title>
+		
+		<link href='https://fonts.googleapis.com/css?family=Pacifico' rel='stylesheet' type='text/css'>    
+    <link href="assets/css/bootstrap.min.css" rel="stylesheet">
+    <link href="assets/css/bootflat.min.css" rel="stylesheet">
+    <link href="assets/css/font-awesome.min.css" rel="stylesheet">
+    <link href="assets/css/animate.css" rel="stylesheet">
+    <link href="assets/css/style.css" rel="stylesheet">
+
+    <!-- HTML5 shim and Respond.js for IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+      <script src="https://oss.maxcdn.com/html5shiv/3.7.2/html5shiv.min.js"></script>
+      <script src="https://oss.maxcdn.com/respond/1.4.2/respond.min.js"></script>
+    <![endif]-->    
+  </head>
+
+  <body>
+    <div class="container">
+        <h1><span class="fa fa-music"></span> Audio FFT</h1>        
+        <div class="row text-center">
+          <div id="audioPlot" style="width:1024px;height:400px;"></div>
+        </div>
+        <div class="row text-center">
+          <div id="frequencyPlot" style="width:1024px;height:400px;"></div>
+        </div>
+    </div>
+  </body>
+    
+  <script type="text/javascript" src="assets/js/jquery-1.11.0.min.js"></script>
+  <script type="text/javascript" src="assets/js/flot/jquery.flot.js"></script>
+  <script>
+    var DATA_LENGTH = 1024;
+    var audioData = [];
+    var frequencyData = [];
+    
+    for(var i = 0; i < DATA_LENGTH;i++) {
+      audioData.push([i, 0]);      
+    }
+    for(var i = 0; i <= DATA_LENGTH/2;i++) {
+      frequencyData.push([-4000 + i*15.626, 0]);      
+    }    
+    var audioPlot = $.plot("#audioPlot", [ audioData ], {
+			series: {
+				shadowSize: 0	// Drawing is faster without shadows
+			},
+			yaxis: {
+				min: -32767,
+				max: 32767
+			},
+			xaxis: {
+				show: false
+			},
+      colors: ["#7525d1"]
+		});
+    
+    var frequencyPlot = $.plot("#frequencyPlot", [ frequencyData ], {
+			series: {
+				shadowSize: 0	// Drawing is faster without shadows
+			},
+			yaxis: {
+				min: 0,
+				max: 32767/4
+			},
+			xaxis: {
+				show: true
+			},
+      colors: ["#FF0000"]
+		});
+    
+    var conn;
+    if (window["WebSocket"]) {
+      conn = new WebSocket("ws://"+window.location.host+"/ws");
+      conn.onclose = function(evt) {
+          console.log("Connection closed");
+      }
+      conn.onmessage = onMsg;
+    } else {
+        console.log("Your browser does not support WebSockets");
+    }
+
+    // called when a message arrives
+    function onMsg(evt) {
+      var message = evt.data;      
+      dataAud = JSON.parse(message).Audio;  
+      dataFreq = JSON.parse(message).Frequency;
+      var audioData = [];
+      var frequencyData = [];
+			for (var i = 0; i < DATA_LENGTH; ++i) {
+				audioData.push([i, dataAud[i]]);
+			}
+      for (var i = DATA_LENGTH/4; i < DATA_LENGTH/2; i++) {
+        //frequencyData.push([-4000 + i*15.4, dataFreq[i]]);
+        frequencyData.push([-4000 + (i-DATA_LENGTH/4)*15.625, dataFreq[i]]);
+      }
+      for (var i = 0; i < DATA_LENGTH/4; i++) {
+        frequencyData.push([i*15.625, dataFreq[i]]);
+			}
+      audioPlot.setData([audioData]);
+      audioPlot.draw();
+      
+      frequencyPlot.setData([frequencyData]);
+      frequencyPlot.draw();
+    }
+    </script>
+</html>

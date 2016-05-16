@@ -1,0 +1,160 @@
+package main
+
+import (
+	"encoding/json"
+	"github.com/tarm/serial"
+	"html/template"
+	"log"
+	"net/http"
+	"os"
+	"time"
+)
+
+const BUFFER_LENGTH = 4096
+
+// sample sinewave data for testing
+var sineWave []uint16 = []uint16{
+	0xfc30, 0x0000, 0x0958, 0x0000, 0x13a8, 0x0000, 0x1c68, 0x0000, 0x2120, 0x0000, 0x2200, 0x0000, 0x1d60, 0x0000, 0x1540, 0x0000,
+	0x0a6c, 0x0000, 0xff58, 0x0000, 0xf58c, 0x0000, 0xec94, 0x0000, 0xe6cc, 0x0000, 0xe4a0, 0x0000, 0xe8f0, 0x0000, 0xf148, 0x0000,
+	0xfd84, 0x0000, 0x0a24, 0x0000, 0x1438, 0x0000, 0x1cc8, 0x0000, 0x20d4, 0x0000, 0x20b8, 0x0000, 0x1b98, 0x0000, 0x12dc, 0x0000,
+	0x0818, 0x0000, 0xfce0, 0x0000, 0xf328, 0x0000, 0xeae0, 0x0000, 0xe518, 0x0000, 0xe3e4, 0x0000, 0xe86c, 0x0000, 0xf1ec, 0x0000,
+	0xfde4, 0x0000, 0x0a6c, 0x0000, 0x1454, 0x0000, 0x1bfc, 0x0000, 0x1fcc, 0x0000, 0x1ef0, 0x0000, 0x1904, 0x0000, 0x106c, 0x0000,
+	0x04d0, 0x0000, 0xfa3c, 0x0000, 0xf054, 0x0000, 0xe830, 0x0000, 0xe2e8, 0x0000, 0xe2a8, 0x0000, 0xe808, 0x0000, 0xf1a0, 0x0000,
+	0xfe1c, 0x0000, 0x0a40, 0x0000, 0x1420, 0x0000, 0x1b6c, 0x0000, 0x1ec0, 0x0000, 0x1d14, 0x0000, 0x16d8, 0x0000, 0x0dd8, 0x0000,
+	0x0254, 0x0000, 0xf830, 0x0000, 0xee40, 0x0000, 0xe694, 0x0000, 0xe1f4, 0x0000, 0xe258, 0x0000, 0xe844, 0x0000, 0xf2a8, 0x0000,
+	0xff20, 0x0000, 0x0b4c, 0x0000, 0x14d4, 0x0000, 0x1bec, 0x0000, 0x1e54, 0x0000, 0x1c48, 0x0000, 0x15b4, 0x0000, 0x0c44, 0x0000,
+	0x00b0, 0x0000, 0xf668, 0x0000, 0xed0c, 0x0000, 0xe58c, 0x0000, 0xe1a0, 0x0000, 0xe2b0, 0x0000, 0xe97c, 0x0000, 0xf418, 0x0000,
+	0x00d4, 0x0000, 0x0c74, 0x0000, 0x15e4, 0x0000, 0x1c2c, 0x0000, 0x1ea4, 0x0000, 0x1b8c, 0x0000, 0x14c0, 0x0000, 0x0a94, 0x0000,
+	0xff88, 0x0000, 0xf55c, 0x0000, 0xec0c, 0x0000, 0xe53c, 0x0000, 0xe1f8, 0x0000, 0xe3f4, 0x0000, 0xeb7c, 0x0000, 0xf6ac, 0x0000,
+	0x0308, 0x0000, 0x0f04, 0x0000, 0x17a0, 0x0000, 0x1df8, 0x0000, 0x1f44, 0x0000, 0x1c08, 0x0000, 0x1484, 0x0000, 0x0a84, 0x0000,
+	0xff38, 0x0000, 0xf53c, 0x0000, 0xec6c, 0x0000, 0xe5bc, 0x0000, 0xe2fc, 0x0000, 0xe5d8, 0x0000, 0xeda0, 0x0000, 0xf924, 0x0000,
+	0x0618, 0x0000, 0x1108, 0x0000, 0x19d0, 0x0000, 0x1f44, 0x0000, 0x2010, 0x0000, 0x1c4c, 0x0000, 0x142c, 0x0000, 0x09c4, 0x0000,
+	0xfe88, 0x0000, 0xf4d0, 0x0000, 0xebf8, 0x0000, 0xe5c4, 0x0000, 0xe3c0, 0x0000, 0xe798, 0x0000, 0xefd0, 0x0000, 0xfbe8, 0x0000}
+
+// Cache templates
+var templates = template.Must(template.ParseFiles("home.html"))
+
+func homeHandler(w http.ResponseWriter, r *http.Request) {
+	t, err := template.New("home.html").ParseFiles("home.html")
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = t.Execute(w, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//templates.ExecuteTemplate(w, "home.html", nil)
+}
+
+var serialPort *serial.Port
+
+func initSerial() {
+	var err error
+	c := &serial.Config{Name: "COM9", Baud: 115200}
+	serialPort, err = serial.OpenPort(c)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func GetSerialData(out chan<- []byte) {
+	var idx int
+	buf := make([]byte, BUFFER_LENGTH)
+	ret := make([]byte, BUFFER_LENGTH)
+
+	if serialPort != nil {
+		for {
+			// read 4096 bytes
+			n, err := serialPort.Read(buf)
+			if err != nil {
+				close(out)
+				log.Fatal(err)
+			}
+			copy(ret[idx:idx+n], buf[:n])
+			idx = idx + n
+			if idx == BUFFER_LENGTH {
+				idx = 0
+				out <- ret
+			}
+		}
+	} else {
+    close(out)
+		log.Fatal("Serial Port is Closed")
+	}
+}
+
+func SendSampleData() {
+	for {
+		buf2 := make([]int16, 128)
+		for i := 0; i < 256; i += 2 {
+			buf2[i>>1] = int16(sineWave[i])
+		}
+		data := struct{ Data []int16 }{buf2}
+		b, err := json.Marshal(data)
+		if err != nil {
+			log.Fatal(err)
+		}
+		h.broadcast <- b
+		time.Sleep(time.Millisecond * 2000)
+	}
+}
+
+func main() {
+	httpHost := os.Getenv("HOST")
+	httpPort := os.Getenv("PORT")
+	if httpPort == "" {
+		httpPort = "8051"
+	}
+
+	initSerial()
+	defer serialPort.Close()
+
+	// start websockets hub
+	go h.run()
+
+	// send sample data over websockets
+	//go SendSampleData()
+
+  // read data from serial and send it over websockets
+  outChan := make(chan []byte)
+  go GetSerialData(outChan)	
+	go func(sData chan []byte) {
+		var tShort, idx uint16		
+		audioData := make([]int16, BUFFER_LENGTH/4)
+		frequencyData := make([]int16, BUFFER_LENGTH/4)
+		for {			
+			buf := <-sData
+      //log.Println(buf)
+			// seperate interlaced audio and frequency data
+			idx = 0
+			for i := 0; i < BUFFER_LENGTH/4; i++ {
+				tShort = uint16(buf[idx+1])
+				tShort = (tShort << 8) | uint16(buf[idx])
+				audioData[i] = int16(tShort)
+
+				tShort = uint16(buf[idx+3])
+				tShort = (tShort << 8) | uint16(buf[idx+2])
+				frequencyData[i] = int16(tShort)
+				idx = idx + 4
+			}
+			data := struct {
+				Audio     []int16
+				Frequency []int16
+			}{audioData, frequencyData}
+			b, err := json.Marshal(data)
+			if err != nil {
+				log.Fatal(err)
+			}
+			h.broadcast <- b
+		}
+	}(outChan)
+
+	http.HandleFunc("/", homeHandler)
+	http.HandleFunc("/ws", serveWs)
+	http.HandleFunc("/assets/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, r.URL.Path[1:])
+	})
+
+	log.Printf("Audio FFT server listening on %s:%s\n", httpHost, httpPort)
+	http.ListenAndServe(httpHost+":"+httpPort, nil)
+}
